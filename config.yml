@@ -1,12 +1,12 @@
 # nginx $document_root
 root: /srv/ftp
+output_prefix: /.yatex
 
-# format whitelist + search order
 formats:
-  - webp
-  - png
-  - jpeg
   - jpg
+  - jpeg
+  - png
+  - webp
 
 dimensions:
   # Auto height

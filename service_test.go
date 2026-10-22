@@ -36,7 +36,7 @@ func (f *fakeResizer) Resize(source, destination, format string, width, height, 
 func testConfig(t *testing.T, root string) *config {
 	t.Helper()
 	cfg := &config{
-		Root: root, Formats: []string{"webp", "png", "jpeg", "jpg"},
+		Root: root, OutputPrefix: "/.yatex", Formats: []string{"webp", "png", "jpeg", "jpg"},
 		Dimensions: []any{uint64(640), "640x480"}, Qualities: []int{75, 82, 100},
 	}
 	if !assert.NoError(t, cfg.prepare()) {
@@ -54,23 +54,26 @@ func request(t *testing.T, handler http.Handler, target string) *httptest.Respon
 
 func TestExistingThumbnailRedirectsWithoutResize(t *testing.T) {
 	root := t.TempDir()
-	assert.NoError(t, os.WriteFile(filepath.Join(root, "photo@640.jpg"), []byte("existing"), 0o644))
+	target := filepath.Join(root, ".yatex", "photo.jpg@640w_75q.jpg")
+	assert.NoError(t, os.MkdirAll(filepath.Dir(target), 0o755))
+	assert.NoError(t, os.WriteFile(target, []byte("existing"), 0o644))
 	resizer := &fakeResizer{}
-	recorder := request(t, newService(testConfig(t, root), resizer), "/photo@640.jpg")
+	recorder := request(t, newService(testConfig(t, root), resizer), "/photo.jpg@640w_75q.jpg")
 	assert.Equal(t, http.StatusOK, recorder.Code)
-	assert.Equal(t, "/photo@640.jpg", recorder.Header().Get("X-Accel-Redirect"))
+	assert.Equal(t, "/.yatex/photo.jpg@640w_75q.jpg", recorder.Header().Get("X-Accel-Redirect"))
 	assert.Empty(t, recorder.Body.String())
 	assert.Empty(t, resizer.calls)
 }
 
-func TestGeneratesThumbnailFromExactSuffix(t *testing.T) {
+func TestGeneratesFromExactSourceName(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "nested", "photo.JPG")
 	assert.NoError(t, os.MkdirAll(filepath.Dir(source), 0o755))
 	assert.NoError(t, os.WriteFile(source, []byte("source"), 0o644))
 	resizer := &fakeResizer{}
-	recorder := request(t, newService(testConfig(t, root), resizer), "/nested/photo@640.JPG")
+	recorder := request(t, newService(testConfig(t, root), resizer), "/nested/photo.JPG@640w")
 	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, "/.yatex/nested/photo.JPG@640w_75q.jpg", recorder.Header().Get("X-Accel-Redirect"))
 	if !assert.Len(t, resizer.calls, 1) {
 		return
 	}
@@ -80,10 +83,26 @@ func TestGeneratesThumbnailFromExactSuffix(t *testing.T) {
 	assert.Equal(t, 640, call.width)
 	assert.Zero(t, call.height)
 	assert.Equal(t, 75, call.quality)
-	assert.Equal(t, "photo@640@75.JPG", filepath.Base(call.destination))
-	target, err := os.Readlink(filepath.Join(root, "nested", "photo@640.JPG"))
-	assert.NoError(t, err)
-	assert.Equal(t, "photo@640@75.JPG", target)
+	assert.Equal(t, filepath.Join(root, ".yatex", "nested", "photo.JPG@640w_75q.jpg"), call.destination)
+	info, err := os.Lstat(call.destination)
+	if assert.NoError(t, err) {
+		assert.False(t, info.Mode().Type() == os.ModeSymlink)
+	}
+}
+
+func TestSourceNameRemainsIntact(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "photo@original.jpg")
+	assert.NoError(t, os.WriteFile(source, []byte("source"), 0o644))
+	resizer := &fakeResizer{}
+
+	recorder := request(t, newService(testConfig(t, root), resizer), "/photo@original.jpg@640w_82q.webp")
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	if assert.Len(t, resizer.calls, 1) {
+		assert.Equal(t, source, resizer.calls[0].source)
+		assert.Equal(t, filepath.Join(root, ".yatex", "photo@original.jpg@640w_82q.webp"), resizer.calls[0].destination)
+	}
 }
 
 func TestGeneratesExplicitQualityVariant(t *testing.T) {
@@ -92,31 +111,68 @@ func TestGeneratesExplicitQualityVariant(t *testing.T) {
 	assert.NoError(t, os.WriteFile(source, []byte("source"), 0o644))
 	resizer := &fakeResizer{}
 
-	recorder := request(t, newService(testConfig(t, root), resizer), "/photo@640@82.jpg")
+	recorder := request(t, newService(testConfig(t, root), resizer), "/photo.jpg@640w_82q.webp")
 
 	assert.Equal(t, http.StatusOK, recorder.Code)
-	assert.Equal(t, "/photo@640@82.jpg", recorder.Header().Get("X-Accel-Redirect"))
+	assert.Equal(t, "/.yatex/photo.jpg@640w_82q.webp", recorder.Header().Get("X-Accel-Redirect"))
 	if assert.Len(t, resizer.calls, 1) {
-		assert.Equal(t, filepath.Join(root, "photo@640@82.jpg"), resizer.calls[0].destination)
+		assert.Equal(t, filepath.Join(root, ".yatex", "photo.jpg@640w_82q.webp"), resizer.calls[0].destination)
+		assert.Equal(t, "webp", resizer.calls[0].format)
 		assert.Equal(t, 82, resizer.calls[0].quality)
 	}
-	_, err := os.Lstat(filepath.Join(root, "photo@640.jpg"))
+	_, err := os.Lstat(filepath.Join(root, ".yatex", "photo.jpg@640w.webp"))
 	assert.True(t, os.IsNotExist(err))
 }
 
-func TestQualitylessRequestReusesDefaultVariant(t *testing.T) {
+func TestOmittedQualityAndExtensionReuseCanonicalVariant(t *testing.T) {
 	root := t.TempDir()
-	defaultVariant := filepath.Join(root, "photo@640@75.webp")
+	defaultVariant := filepath.Join(root, ".yatex", "photo.webp@640w_75q.webp")
+	assert.NoError(t, os.MkdirAll(filepath.Dir(defaultVariant), 0o755))
 	assert.NoError(t, os.WriteFile(defaultVariant, []byte("existing"), 0o644))
 	resizer := &fakeResizer{}
 
-	recorder := request(t, newService(testConfig(t, root), resizer), "/photo@640.webp")
+	recorder := request(t, newService(testConfig(t, root), resizer), "/photo.webp@640w")
 
 	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, "/.yatex/photo.webp@640w_75q.webp", recorder.Header().Get("X-Accel-Redirect"))
 	assert.Empty(t, resizer.calls)
-	target, err := os.Readlink(filepath.Join(root, "photo@640.webp"))
-	assert.NoError(t, err)
-	assert.Equal(t, "photo@640@75.webp", target)
+}
+
+func TestOmittedAndExplicitExtensionsResolveToSameArtifact(t *testing.T) {
+	root := t.TempDir()
+	assert.NoError(t, os.WriteFile(filepath.Join(root, "photo.jpg"), []byte("source"), 0o644))
+	resizer := new(fakeResizer)
+	service := newService(testConfig(t, root), resizer)
+
+	omitted := request(t, service, "/photo.jpg@640w_480h")
+	explicit := request(t, service, "/photo.jpg@640w_480h.jpg")
+
+	canonical := "/.yatex/photo.jpg@640w_480h_75q.jpg"
+	assert.Equal(t, http.StatusOK, omitted.Code)
+	assert.Equal(t, http.StatusOK, explicit.Code)
+	assert.Equal(t, canonical, omitted.Header().Get("X-Accel-Redirect"))
+	assert.Equal(t, canonical, explicit.Header().Get("X-Accel-Redirect"))
+	assert.Len(t, resizer.calls, 1)
+}
+
+func TestConfiguredOutputPrefixControlsStorageAndRedirect(t *testing.T) {
+	root := t.TempDir()
+	assert.NoError(t, os.MkdirAll(filepath.Join(root, "images"), 0o755))
+	source := filepath.Join(root, "images", "photo.jpg")
+	assert.NoError(t, os.WriteFile(source, []byte("source"), 0o644))
+	cfg := testConfig(t, root)
+	cfg.OutputPrefix = "/cache/thumbs"
+	resizer := new(fakeResizer)
+
+	recorder := request(t, newService(cfg, resizer), "/images/photo.jpg@640w")
+
+	canonical := "/cache/thumbs/images/photo.jpg@640w_75q.jpg"
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, canonical, recorder.Header().Get("X-Accel-Redirect"))
+	if assert.Len(t, resizer.calls, 1) {
+		assert.Equal(t, source, resizer.calls[0].source)
+		assert.Equal(t, filepath.Join(root, "cache", "thumbs", "images", "photo.jpg@640w_75q.jpg"), resizer.calls[0].destination)
+	}
 }
 
 func TestPNGGeneratesWithoutQuality(t *testing.T) {
@@ -125,48 +181,23 @@ func TestPNGGeneratesWithoutQuality(t *testing.T) {
 	assert.NoError(t, os.WriteFile(source, []byte("source"), 0o644))
 	resizer := &fakeResizer{}
 
-	recorder := request(t, newService(testConfig(t, root), resizer), "/photo@640.png")
+	recorder := request(t, newService(testConfig(t, root), resizer), "/photo.png@640w")
 
 	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, "/.yatex/photo.png@640w.png", recorder.Header().Get("X-Accel-Redirect"))
 	if assert.Len(t, resizer.calls, 1) {
-		assert.Equal(t, filepath.Join(root, "photo@640.png"), resizer.calls[0].destination)
+		assert.Equal(t, filepath.Join(root, ".yatex", "photo.png@640w.png"), resizer.calls[0].destination)
 		assert.Zero(t, resizer.calls[0].quality)
 	}
-}
-
-func TestSourceSearchPrecedence(t *testing.T) {
-	t.Run("requested suffix case insensitive", func(t *testing.T) {
-		root := t.TempDir()
-		for _, name := range []string{"photo.JpG", "photo.webp"} {
-			assert.NoError(t, os.WriteFile(filepath.Join(root, name), []byte(name), 0o644))
-		}
-		resizer := &fakeResizer{}
-		recorder := request(t, newService(testConfig(t, root), resizer), "/photo@640.jpg")
-		assert.Equal(t, http.StatusOK, recorder.Code)
-		if assert.Len(t, resizer.calls, 1) {
-			assert.Equal(t, "photo.JpG", filepath.Base(resizer.calls[0].source))
-		}
-	})
-
-	t.Run("configured format order", func(t *testing.T) {
-		root := t.TempDir()
-		for _, name := range []string{"photo.PNG", "photo.WeBp"} {
-			assert.NoError(t, os.WriteFile(filepath.Join(root, name), []byte(name), 0o644))
-		}
-		resizer := &fakeResizer{}
-		recorder := request(t, newService(testConfig(t, root), resizer), "/photo@640.jpg")
-		assert.Equal(t, http.StatusOK, recorder.Code)
-		if assert.Len(t, resizer.calls, 1) {
-			assert.Equal(t, "photo.WeBp", filepath.Base(resizer.calls[0].source))
-		}
-	})
 }
 
 func TestRejectsInvalidRequests(t *testing.T) {
 	service := newService(testConfig(t, t.TempDir()), &fakeResizer{})
 	for _, target := range []string{
-		"/photo@123.jpg", "/photo@640.gif", "/photo.jpg", "/photo@640.jpg/extra",
-		"/photo@640@60.jpg", "/photo@640@75.png", "/photo@a@b@c.jpg",
+		"/photo.jpg@123w.jpg", "/photo.jpg@640w.gif", "/photo.jpg",
+		"/photo.jpg@640w_60q.jpg", "/photo.png@640w_75q.png",
+		"/photo.jpg@640w_480h_75q_extra.jpg", "/photo.jpg@480h_640w.jpg",
+		"/photo.jpg@640w_75q_480h.jpg",
 	} {
 		recorder := request(t, service, target)
 		assert.Equal(t, http.StatusNotFound, recorder.Code, target)
@@ -174,7 +205,7 @@ func TestRejectsInvalidRequests(t *testing.T) {
 }
 
 func TestMissingSourceReturns404(t *testing.T) {
-	recorder := request(t, newService(testConfig(t, t.TempDir()), &fakeResizer{}), "/photo@640x480.png")
+	recorder := request(t, newService(testConfig(t, t.TempDir()), &fakeResizer{}), "/photo.png@640w_480h.png")
 	assert.Equal(t, http.StatusNotFound, recorder.Code)
 }
 
@@ -188,7 +219,7 @@ func TestConcurrentRequestsGenerateOnce(t *testing.T) {
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
-			assert.Equal(t, http.StatusOK, request(t, service, "/photo@640.jpg").Code)
+			assert.Equal(t, http.StatusOK, request(t, service, "/photo.jpg@640w").Code)
 		}()
 	}
 	wait.Wait()

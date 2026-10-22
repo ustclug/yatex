@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/davidbyttow/govips/v2/vips"
 )
@@ -17,16 +18,24 @@ func (vipsResizer) Resize(source, destination, format string, width, height, qua
 	}
 	defer image.Close()
 
-	if image.Width() <= width && (height == 0 || image.Height() <= height) {
-		return publishSymlink(source, destination)
+	fits := image.Width() <= width
+	if height > 0 {
+		if image.Height() > height {
+			fits = false
+		}
+	}
+	if fits {
+		if formatsMatch(filepath.Ext(source), format) {
+			return publishSymlink(source, destination)
+		}
 	}
 
-	if height == 0 {
-		if err := image.Resize(float64(width)/float64(image.Width()), vips.KernelLanczos3); err != nil {
-			return err
-		}
-	} else {
-		if err := image.Thumbnail(width, height, vips.InterestingNone); err != nil {
+	if !fits {
+		if height == 0 {
+			if err := image.Resize(float64(width)/float64(image.Width()), vips.KernelLanczos3); err != nil {
+				return err
+			}
+		} else if err := image.Thumbnail(width, height, vips.InterestingNone); err != nil {
 			return err
 		}
 	}
@@ -51,7 +60,7 @@ func (vipsResizer) Resize(source, destination, format string, width, height, qua
 		return err
 	}
 
-	temporary, err := os.CreateTemp(filepath.Dir(destination), ".yatex-*")
+	temporary, err := os.CreateTemp(filepath.Dir(destination), ".thumbnail-*")
 	if err != nil {
 		return err
 	}
@@ -72,8 +81,21 @@ func (vipsResizer) Resize(source, destination, format string, width, height, qua
 	return os.Rename(temporaryName, destination)
 }
 
+func formatsMatch(sourceExtension, outputFormat string) bool {
+	sourceFormat := strings.ToLower(strings.TrimPrefix(sourceExtension, "."))
+	if sourceFormat == outputFormat {
+		return true
+	}
+	if sourceFormat != "jpg" {
+		if sourceFormat != "jpeg" {
+			return false
+		}
+	}
+	return outputFormat == "jpg" || outputFormat == "jpeg"
+}
+
 func publishSymlink(source, destination string) error {
-	temporary, err := os.CreateTemp(filepath.Dir(destination), ".yatex-link-*")
+	temporary, err := os.CreateTemp(filepath.Dir(destination), ".thumbnail-link-*")
 	if err != nil {
 		return err
 	}

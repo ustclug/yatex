@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 
@@ -10,10 +11,11 @@ import (
 )
 
 type config struct {
-	Root       string   `yaml:"root"`
-	Formats    []string `yaml:"formats"`
-	Dimensions []any    `yaml:"dimensions"`
-	Qualities  []int    `yaml:"qualities"`
+	Root         string   `yaml:"root"`
+	OutputPrefix string   `yaml:"output_prefix"`
+	Formats      []string `yaml:"formats"`
+	Dimensions   []any    `yaml:"dimensions"`
+	Qualities    []int    `yaml:"qualities"`
 
 	dimensionSet   map[string]struct{}
 	formatSet      map[string]struct{}
@@ -40,6 +42,9 @@ func loadConfig(filename string) (*config, error) {
 func (c *config) prepare() error {
 	if c.Root == "" {
 		return fmt.Errorf("config: root is required")
+	}
+	if c.OutputPrefix == "" || !strings.HasPrefix(c.OutputPrefix, "/") || path.Clean(c.OutputPrefix) != c.OutputPrefix || c.OutputPrefix == "/" {
+		return fmt.Errorf("config: output_prefix must be a clean absolute path other than /")
 	}
 	if len(c.Formats) == 0 {
 		return fmt.Errorf("config: at least one format is required")

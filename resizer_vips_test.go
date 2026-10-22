@@ -35,13 +35,48 @@ func TestVipsResizerSymlinksSourceWithinBoundingBox(t *testing.T) {
 	writePNG(t, source, 800, 600)
 
 	assert.NoError(t, (vipsResizer{}).Resize(source, destination, "png", 1024, 768, 0))
-	info, err := os.Lstat(destination)
-	if assert.NoError(t, err) {
-		assert.NotZero(t, info.Mode()&os.ModeSymlink)
-	}
 	target, err := os.Readlink(destination)
 	assert.NoError(t, err)
 	assert.Equal(t, "photo.png", target)
+}
+
+func TestVipsResizerSymlinkResolvesAcrossOutputPrefix(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "images", "nested", "photo.png")
+	destination := filepath.Join(root, ".yatex", "images", "nested", "photo.png@1024w_768h.png")
+	assert.NoError(t, os.MkdirAll(filepath.Dir(source), 0o755))
+	assert.NoError(t, os.MkdirAll(filepath.Dir(destination), 0o755))
+	writePNG(t, source, 800, 600)
+
+	assert.NoError(t, (vipsResizer{}).Resize(source, destination, "png", 1024, 768, 0))
+	target, err := os.Readlink(destination)
+	assert.NoError(t, err)
+	assert.Equal(t, filepath.Join("..", "..", "..", "images", "nested", "photo.png"), target)
+	resolved, err := filepath.EvalSymlinks(destination)
+	assert.NoError(t, err)
+	assert.Equal(t, source, resolved)
+}
+
+func TestVipsResizerConvertsFittingSourceInsteadOfSymlinking(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "photo.png")
+	destination := filepath.Join(root, "photo.png@1024w_768h.webp")
+	writePNG(t, source, 800, 600)
+
+	assert.NoError(t, (vipsResizer{}).Resize(source, destination, "webp", 1024, 768, 80))
+	info, err := os.Lstat(destination)
+	if assert.NoError(t, err) {
+		assert.False(t, info.Mode().Type() == os.ModeSymlink)
+	}
+	data, err := os.ReadFile(destination)
+	if !assert.NoError(t, err) {
+		return
+	}
+	if !assert.GreaterOrEqual(t, len(data), 12) {
+		return
+	}
+	assert.Equal(t, "RIFF", string(data[:4]))
+	assert.Equal(t, "WEBP", string(data[8:12]))
 }
 
 func TestVipsResizerResizesSourceOutsideBoundingBox(t *testing.T) {
@@ -53,7 +88,7 @@ func TestVipsResizerResizesSourceOutsideBoundingBox(t *testing.T) {
 	assert.NoError(t, (vipsResizer{}).Resize(source, destination, "png", 640, 480, 0))
 	info, err := os.Lstat(destination)
 	if assert.NoError(t, err) {
-		assert.Zero(t, info.Mode()&os.ModeSymlink)
+		assert.False(t, info.Mode().Type() == os.ModeSymlink)
 	}
 	file, err := os.Open(destination)
 	if !assert.NoError(t, err) {
