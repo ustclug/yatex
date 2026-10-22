@@ -17,6 +17,10 @@ func (vipsResizer) Resize(source, destination, format string, width, height int)
 	}
 	defer image.Close()
 
+	if image.Width() <= width && (height == 0 || image.Height() <= height) {
+		return publishSymlink(source, destination)
+	}
+
 	if height == 0 {
 		if err := image.Resize(float64(width)/float64(image.Width()), vips.KernelLanczos3); err != nil {
 			return err
@@ -58,6 +62,31 @@ func (vipsResizer) Resize(source, destination, format string, width, height int)
 		return err
 	}
 	if err := os.Chmod(temporaryName, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(temporaryName, destination)
+}
+
+func publishSymlink(source, destination string) error {
+	temporary, err := os.CreateTemp(filepath.Dir(destination), ".yatex-link-*")
+	if err != nil {
+		return err
+	}
+	temporaryName := temporary.Name()
+	if err := temporary.Close(); err != nil {
+		os.Remove(temporaryName)
+		return err
+	}
+	if err := os.Remove(temporaryName); err != nil {
+		return err
+	}
+	defer os.Remove(temporaryName)
+
+	relativeSource, err := filepath.Rel(filepath.Dir(destination), source)
+	if err != nil {
+		return err
+	}
+	if err := os.Symlink(relativeSource, temporaryName); err != nil {
 		return err
 	}
 	return os.Rename(temporaryName, destination)
