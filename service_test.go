@@ -52,6 +52,28 @@ func request(t *testing.T, handler http.Handler, target string) *httptest.Respon
 	return recorder
 }
 
+func TestHeadValidURLReturnsOKWithoutGeneration(t *testing.T) {
+	root := t.TempDir()
+	resizer := new(fakeResizer)
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodHead, "/missing.jpg@640w", nil)
+
+	newService(testConfig(t, root), resizer).ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Empty(t, recorder.Body.String())
+	assert.Empty(t, resizer.calls)
+}
+
+func TestHeadInvalidURLReturnsNotFound(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodHead, "/photo.jpg@123w", nil)
+
+	newService(testConfig(t, t.TempDir()), new(fakeResizer)).ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusNotFound, recorder.Code)
+}
+
 func TestExistingThumbnailRedirectsWithoutResize(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, ".yatex", "photo.jpg@640w_75q.jpg")

@@ -26,7 +26,7 @@ func newService(cfg *config, imageResizer resizer) *service {
 }
 
 func (s *service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.NotFound(w, r)
 		return
 	}
@@ -34,6 +34,10 @@ func (s *service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	req, ok := s.parseRequest(r.URL.Path)
 	if !ok {
 		http.NotFound(w, r)
+		return
+	}
+	if r.Method == http.MethodHead {
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 
