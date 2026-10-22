@@ -1,5 +1,5 @@
 # nginx $document_root
-root: /srv/data
+root: /srv/ftp
 
 # format whitelist + search order
 formats:

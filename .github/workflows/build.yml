@@ -5,7 +5,7 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -34,7 +34,14 @@ jobs:
           install-only: true
 
       - name: Build binary and tarball
+        if: github.ref_type != 'tag'
         run: make snapshot
+
+      - name: Create GitHub Release
+        if: github.ref_type == 'tag'
+        run: make release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
