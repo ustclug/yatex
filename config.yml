@@ -1,4 +1,12 @@
+# nginx $document_root
 root: /srv/data
+
+# format whitelist + search order
+formats:
+  - webp
+  - png
+  - jpeg
+  - jpg
 
 dimensions:
   # Auto height
