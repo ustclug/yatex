@@ -1,0 +1,31 @@
+version: 2
+
+project_name: yatex
+
+builds:
+  - id: yatex
+    main: .
+    binary: yatex
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - linux
+    goarch:
+      - amd64
+
+archives:
+  - ids:
+      - yatex
+    formats:
+      - tar.gz
+    files:
+      - config.yml
+
+checksum:
+  disable: true
+
+changelog:
+  disable: true
+
+release:
+  disable: true
