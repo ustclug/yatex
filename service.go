@@ -8,12 +8,13 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 )
 
 type resizer interface {
-	Resize(source, destination, format string, width, height int) error
+	Resize(source, destination, format string, width, height, quality int) error
 }
 
 type service struct {
@@ -50,6 +51,15 @@ func (s *service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		redirect(w, req.urlPath)
 		return
 	}
+	if isRegularFile(req.outputTarget) {
+		if err := publishSymlink(req.outputTarget, req.target); err != nil {
+			log.Printf("create default-quality link for %q: %v", req.urlPath, err)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		redirect(w, req.urlPath)
+		return
+	}
 	source, err := s.findSource(req)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -63,10 +73,17 @@ func (s *service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
-	if err := s.resizer.Resize(source, req.target, req.format, req.width, req.height); err != nil {
+	if err := s.resizer.Resize(source, req.outputTarget, req.format, req.width, req.height, req.quality); err != nil {
 		log.Printf("resize %q from %q: %v", req.urlPath, source, err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
+	}
+	if req.target != req.outputTarget {
+		if err := publishSymlink(req.outputTarget, req.target); err != nil {
+			log.Printf("create default-quality link for %q: %v", req.urlPath, err)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
 	}
 	redirect(w, req.urlPath)
 }
@@ -74,11 +91,13 @@ func (s *service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 type imageRequest struct {
 	urlPath       string
 	target        string
+	outputTarget  string
 	directory     string
 	sourceBase    string
 	requestedExt  string
 	format        string
 	width, height int
+	quality       int
 }
 
 func (s *service) parseRequest(urlPath string) (imageRequest, bool) {
@@ -95,11 +114,14 @@ func (s *service) parseRequest(urlPath string) (imageRequest, bool) {
 		return imageRequest{}, false
 	}
 	stem := strings.TrimSuffix(name, ext)
-	at := strings.LastIndexByte(stem, '@')
-	if at <= 0 || at == len(stem)-1 {
+	parts := strings.Split(stem, "@")
+	if len(parts) < 2 || len(parts) > 3 || parts[0] == "" {
 		return imageRequest{}, false
 	}
-	dimension := stem[at+1:]
+	if format == "png" && len(parts) != 2 {
+		return imageRequest{}, false
+	}
+	dimension := parts[1]
 	if _, ok := s.cfg.dimensionSet[dimension]; !ok {
 		return imageRequest{}, false
 	}
@@ -107,13 +129,32 @@ func (s *service) parseRequest(urlPath string) (imageRequest, bool) {
 	if err != nil {
 		return imageRequest{}, false
 	}
+	quality := 0
+	qualitySpecified := len(parts) == 3
+	if format != "png" {
+		quality = s.cfg.defaultQuality
+		if qualitySpecified {
+			quality, err = strconv.Atoi(parts[2])
+			if err != nil {
+				return imageRequest{}, false
+			}
+		}
+		if _, ok := s.cfg.qualitySet[quality]; !ok {
+			return imageRequest{}, false
+		}
+	}
 	relative := strings.TrimPrefix(urlPath, "/")
 	target := filepath.Join(s.cfg.Root, filepath.FromSlash(relative))
 	directory := filepath.Dir(target)
+	outputTarget := target
+	if format != "png" && !qualitySpecified {
+		outputName := parts[0] + "@" + dimension + "@" + strconv.Itoa(quality) + ext
+		outputTarget = filepath.Join(directory, outputName)
+	}
 	return imageRequest{
-		urlPath: urlPath, target: target, directory: directory,
-		sourceBase: stem[:at], requestedExt: strings.TrimPrefix(ext, "."),
-		format: format, width: width, height: height,
+		urlPath: urlPath, target: target, outputTarget: outputTarget, directory: directory,
+		sourceBase: parts[0], requestedExt: strings.TrimPrefix(ext, "."),
+		format: format, width: width, height: height, quality: quality,
 	}, true
 }
 

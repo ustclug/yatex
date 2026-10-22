@@ -14,6 +14,7 @@ import (
 type resizeCall struct {
 	source, destination, format string
 	width, height               int
+	quality                     int
 }
 
 type fakeResizer struct {
@@ -22,9 +23,9 @@ type fakeResizer struct {
 	err   error
 }
 
-func (f *fakeResizer) Resize(source, destination, format string, width, height int) error {
+func (f *fakeResizer) Resize(source, destination, format string, width, height, quality int) error {
 	f.mu.Lock()
-	f.calls = append(f.calls, resizeCall{source, destination, format, width, height})
+	f.calls = append(f.calls, resizeCall{source, destination, format, width, height, quality})
 	f.mu.Unlock()
 	if f.err != nil {
 		return f.err
@@ -36,7 +37,7 @@ func testConfig(t *testing.T, root string) *config {
 	t.Helper()
 	cfg := &config{
 		Root: root, Formats: []string{"webp", "png", "jpeg", "jpg"},
-		Dimensions: []any{uint64(640), "640x480"}, Qualities: []int{60, 80},
+		Dimensions: []any{uint64(640), "640x480"}, Qualities: []int{75, 82, 100},
 	}
 	if !assert.NoError(t, cfg.prepare()) {
 		return nil
@@ -78,6 +79,59 @@ func TestGeneratesThumbnailFromExactSuffix(t *testing.T) {
 	assert.Equal(t, "jpg", call.format)
 	assert.Equal(t, 640, call.width)
 	assert.Zero(t, call.height)
+	assert.Equal(t, 75, call.quality)
+	assert.Equal(t, "photo@640@75.JPG", filepath.Base(call.destination))
+	target, err := os.Readlink(filepath.Join(root, "nested", "photo@640.JPG"))
+	assert.NoError(t, err)
+	assert.Equal(t, "photo@640@75.JPG", target)
+}
+
+func TestGeneratesExplicitQualityVariant(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "photo.jpg")
+	assert.NoError(t, os.WriteFile(source, []byte("source"), 0o644))
+	resizer := &fakeResizer{}
+
+	recorder := request(t, newService(testConfig(t, root), resizer), "/photo@640@82.jpg")
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, "/photo@640@82.jpg", recorder.Header().Get("X-Accel-Redirect"))
+	if assert.Len(t, resizer.calls, 1) {
+		assert.Equal(t, filepath.Join(root, "photo@640@82.jpg"), resizer.calls[0].destination)
+		assert.Equal(t, 82, resizer.calls[0].quality)
+	}
+	_, err := os.Lstat(filepath.Join(root, "photo@640.jpg"))
+	assert.True(t, os.IsNotExist(err))
+}
+
+func TestQualitylessRequestReusesDefaultVariant(t *testing.T) {
+	root := t.TempDir()
+	defaultVariant := filepath.Join(root, "photo@640@75.webp")
+	assert.NoError(t, os.WriteFile(defaultVariant, []byte("existing"), 0o644))
+	resizer := &fakeResizer{}
+
+	recorder := request(t, newService(testConfig(t, root), resizer), "/photo@640.webp")
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Empty(t, resizer.calls)
+	target, err := os.Readlink(filepath.Join(root, "photo@640.webp"))
+	assert.NoError(t, err)
+	assert.Equal(t, "photo@640@75.webp", target)
+}
+
+func TestPNGGeneratesWithoutQuality(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "photo.png")
+	assert.NoError(t, os.WriteFile(source, []byte("source"), 0o644))
+	resizer := &fakeResizer{}
+
+	recorder := request(t, newService(testConfig(t, root), resizer), "/photo@640.png")
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	if assert.Len(t, resizer.calls, 1) {
+		assert.Equal(t, filepath.Join(root, "photo@640.png"), resizer.calls[0].destination)
+		assert.Zero(t, resizer.calls[0].quality)
+	}
 }
 
 func TestSourceSearchPrecedence(t *testing.T) {
@@ -112,6 +166,7 @@ func TestRejectsInvalidRequests(t *testing.T) {
 	service := newService(testConfig(t, t.TempDir()), &fakeResizer{})
 	for _, target := range []string{
 		"/photo@123.jpg", "/photo@640.gif", "/photo.jpg", "/photo@640.jpg/extra",
+		"/photo@640@60.jpg", "/photo@640@75.png", "/photo@a@b@c.jpg",
 	} {
 		recorder := request(t, service, target)
 		assert.Equal(t, http.StatusNotFound, recorder.Code, target)

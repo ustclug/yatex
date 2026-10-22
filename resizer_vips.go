@@ -10,7 +10,7 @@ import (
 
 type vipsResizer struct{}
 
-func (vipsResizer) Resize(source, destination, format string, width, height int) error {
+func (vipsResizer) Resize(source, destination, format string, width, height, quality int) error {
 	image, err := vips.NewImageFromFile(source)
 	if err != nil {
 		return err
@@ -34,11 +34,16 @@ func (vipsResizer) Resize(source, destination, format string, width, height int)
 	var data []byte
 	switch format {
 	case "jpg", "jpeg":
-		data, _, err = image.ExportJpeg(vips.NewJpegExportParams())
+		params := vips.NewJpegExportParams()
+		params.Quality = quality
+		data, _, err = image.ExportJpeg(params)
 	case "png":
 		data, _, err = image.ExportPng(vips.NewPngExportParams())
 	case "webp":
-		data, _, err = image.ExportWebp(vips.NewWebpExportParams())
+		params := vips.NewWebpExportParams()
+		params.Quality = quality
+		params.Lossless = quality == 100
+		data, _, err = image.ExportWebp(params)
 	default:
 		return fmt.Errorf("unsupported output format %q", format)
 	}

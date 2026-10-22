@@ -18,6 +18,7 @@ func TestLoadConfig(t *testing.T) {
 	}
 	assert.Equal(t, "/srv/data", cfg.Root)
 	assert.Equal(t, "jpg", cfg.Formats[1])
+	assert.Equal(t, 60, cfg.defaultQuality)
 	if _, ok := cfg.dimensionSet["640"]; !ok {
 		assert.Fail(t, "numeric dimension was not loaded")
 	}

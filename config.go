@@ -15,8 +15,10 @@ type config struct {
 	Dimensions []any    `yaml:"dimensions"`
 	Qualities  []int    `yaml:"qualities"`
 
-	dimensionSet map[string]struct{}
-	formatSet    map[string]struct{}
+	dimensionSet   map[string]struct{}
+	formatSet      map[string]struct{}
+	qualitySet     map[int]struct{}
+	defaultQuality int
 }
 
 func loadConfig(filename string) (*config, error) {
@@ -44,6 +46,9 @@ func (c *config) prepare() error {
 	}
 	if len(c.Dimensions) == 0 {
 		return fmt.Errorf("config: at least one dimension is required")
+	}
+	if len(c.Qualities) == 0 {
+		return fmt.Errorf("config: at least one quality is required")
 	}
 
 	c.formatSet = make(map[string]struct{}, len(c.Formats))
@@ -76,6 +81,15 @@ func (c *config) prepare() error {
 		}
 		c.dimensionSet[value] = struct{}{}
 	}
+
+	c.qualitySet = make(map[int]struct{}, len(c.Qualities))
+	for _, quality := range c.Qualities {
+		if quality < 1 || quality > 100 {
+			return fmt.Errorf("config: invalid quality %d", quality)
+		}
+		c.qualitySet[quality] = struct{}{}
+	}
+	c.defaultQuality = c.Qualities[0]
 	return nil
 }
 
